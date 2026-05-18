@@ -14,6 +14,7 @@ from ticktick_cli.auth import get_client
 from ticktick_cli.commands.auth_cmd import auth_group
 from ticktick_cli.commands.calendar_cmd import calendar_group
 from ticktick_cli.commands.config_cmd import config_group
+from ticktick_cli.commands.countdown_cmd import countdown_group
 from ticktick_cli.commands.filter_cmd import filter_group
 from ticktick_cli.commands.focus_cmd import focus_group
 from ticktick_cli.commands.folder_cmd import folder_group
@@ -100,6 +101,7 @@ cli.add_command(template_group, "template")
 cli.add_command(user_group, "user")
 cli.add_command(config_group, "config")
 cli.add_command(schema_command, "schema")
+cli.add_command(countdown_group, "countdown")
 
 
 # ── Standalone commands ──────────────────────────────────

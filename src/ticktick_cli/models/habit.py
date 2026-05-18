@@ -7,6 +7,14 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+HABIT_SECTION_MAP = {
+    "morning": "_morning",
+    "afternoon": "_afternoon",
+    "night": "_night",
+}
+HABIT_SECTION_REVERSE = {v: k for k, v in HABIT_SECTION_MAP.items()}
+
+
 class Habit(BaseModel):
     """Represents a TickTick habit."""
 

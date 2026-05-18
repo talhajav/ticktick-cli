@@ -172,16 +172,49 @@ def habit_create(
 @click.option("--goal", type=float, default=None)
 @click.option("--color", default=None)
 @click.option("--icon", default=None)
+@click.option(
+    "--section",
+    type=click.Choice(["morning", "afternoon", "night"]),
+    default=None,
+    help="Move habit to section",
+)
+@click.option("--repeat", default=None, help="Recurrence RRULE")
+@click.option("--reminder", default=None, help="Reminder time HH:MM")
+@click.option("--unit", default=None, help="Unit label (e.g., glasses, pages)")
 @click.pass_context
-def habit_edit(ctx: click.Context, habit_id: str, **kwargs: Any) -> None:
+def habit_edit(
+    ctx: click.Context,
+    habit_id: str,
+    name: str | None = None,
+    goal: float | None = None,
+    color: str | None = None,
+    icon: str | None = None,
+    section: str | None = None,
+    repeat: str | None = None,
+    reminder: str | None = None,
+    unit: str | None = None,
+) -> None:
     """Edit a habit's properties."""
     client = get_client(ctx.obj.get("profile", "default"))
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000+0000")
     update: dict[str, Any] = {"id": habit_id, "modifiedTime": now}
-    for key, value in kwargs.items():
-        if value is not None:
-            api_key = {"icon": "iconRes"}.get(key, key)
-            update[api_key] = value
+    if name:
+        update["name"] = name
+    if goal is not None:
+        update["goal"] = goal
+    if color:
+        update["color"] = color
+    if icon:
+        update["iconRes"] = icon
+    if section:
+        from ticktick_cli.models.habit import HABIT_SECTION_MAP
+        update["sectionId"] = HABIT_SECTION_MAP.get(section, section)
+    if repeat:
+        update["repeatRule"] = repeat
+    if reminder:
+        update["reminder"] = reminder
+    if unit:
+        update["unit"] = unit
     try:
         client.v2.batch_habits(update=[update])
         output_message(f"Habit {habit_id} updated.", ctx)
@@ -303,3 +336,48 @@ def habit_unarchive(ctx: click.Context, habit_id: str) -> None:
     except Exception as e:
         output_error(str(e), ctx)
         raise SystemExit(1) from None
+
+
+# ── Section / Preferences / Stats ────────────────────────────
+
+
+@habit_group.command("section")
+@click.argument("subcommand", type=click.Choice(["list"]), default="list")
+@click.pass_context
+def habit_section(ctx: click.Context, subcommand: str) -> None:
+    """List habit sections (_morning, _afternoon, _night)."""
+    client = get_client(ctx.obj.get("profile", "default"))
+    try:
+        sections = client.v2.get_habit_sections()
+        output_list(sections, columns=["id", "name"], title="Habit Sections", ctx=ctx)
+    except Exception as e:
+        output_error(str(e), ctx)
+        raise SystemExit(1) from None
+
+
+@habit_group.command("preferences")
+@click.pass_context
+def habit_preferences(ctx: click.Context) -> None:
+    """Show habit preferences."""
+    client = get_client(ctx.obj.get("profile", "default"))
+    try:
+        prefs = client.v2.get_habit_preferences()
+        output_item(prefs, ctx)
+    except Exception as e:
+        output_error(str(e), ctx)
+        raise SystemExit(1) from None
+
+
+@habit_group.command("stats")
+@click.argument("habit_id", required=False)
+@click.pass_context
+def habit_stats(ctx: click.Context, habit_id: str | None) -> None:
+    """Show weekly habit statistics."""
+    client = get_client(ctx.obj.get("profile", "default"))
+    try:
+        stats = client.v2.get_habit_statistics(habit_id)
+        output_item(stats, ctx)
+    except Exception as e:
+        output_error(str(e), ctx)
+        raise SystemExit(1) from None
+
