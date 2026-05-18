@@ -183,6 +183,24 @@ def project_delete(ctx: click.Context, identifier: str, yes: bool) -> None:
         raise SystemExit(1) from None
 
 
+@project_group.command("members")
+@click.argument("project_id")
+@click.pass_context
+def project_members(ctx: click.Context, project_id: str) -> None:
+    """List members of a shared project."""
+    client = get_client(ctx.obj.get("profile", "default"))
+    try:
+        members = client.v2.get_project_members(project_id)
+        if not members:
+            output_message("No members found (project may not be shared).", ctx)
+            return
+        columns = ["userId", "username", "displayName", "isOwner", "permission"]
+        output_list(members, columns=columns, title="Project Members", ctx=ctx)
+    except Exception as e:
+        output_error(str(e), ctx)
+        raise SystemExit(1) from None
+
+
 def _resolve_project(client: Any, name_or_id: str) -> str:
     """Resolve project name to ID."""
     if len(name_or_id) == 24 and name_or_id.isalnum():

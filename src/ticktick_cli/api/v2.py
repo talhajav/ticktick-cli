@@ -167,6 +167,35 @@ class V2Client(BaseClient):
         params = {"start": str(start), "limit": str(limit)}
         return self.get("/project/all/trash/pagination", params=params)
 
+    # ── Project Members ───────────────────────────────────────
+
+    def get_project_members(self, project_id: str) -> list[dict[str, Any]]:
+        """Get members of a shared project. Requires shared project."""
+        data = self.get(f"/project/{project_id}/users")
+        if isinstance(data, dict):
+            return data.get("users", data.get("members", []))
+        if isinstance(data, list):
+            return data
+        return []
+
+    # ── Comment Edit ──────────────────────────────────────────
+
+    def edit_task_comment(
+        self, project_id: str, task_id: str, comment_id: str, text: str
+    ) -> dict[str, Any]:
+        """Edit a task comment. Falls back to delete+recreate if edit endpoint not available."""
+        # Try direct edit first
+        try:
+            return self.put(
+                f"/task/{task_id}/comment/{comment_id}",
+                json_data={"content": text},
+            )
+        except Exception:
+            pass
+        # Fallback: delete + recreate
+        self.delete_task_comment(project_id, task_id, comment_id)
+        return self.create_task_comment(project_id, task_id, text)
+
     # ── Projects (batch) ──────────────────────────────────────
 
     def batch_projects(

@@ -45,6 +45,19 @@ class Task(BaseModel):
     repeat_flag: str | None = Field(default=None, alias="repeatFlag")
     created_time: str | None = Field(default=None, alias="createdTime")
     modified_time: str | None = Field(default=None, alias="modifiedTime")
+    # ── V2-only fields ──
+    assignee: int | None = None
+    kind: str | None = None
+    desc: str | None = None
+    is_floating: bool | None = Field(default=None, alias="isFloating")
+    time_zone: str | None = Field(default=None, alias="timeZone")
+    progress: int | None = None
+    sort_order: int | None = Field(default=None, alias="sortOrder")
+    repeat_from: str | None = Field(default=None, alias="repeatFrom")
+    ex_date: list[str] | None = Field(default=None, alias="exDate")
+    repeat_first_date: str | None = Field(default=None, alias="repeatFirstDate")
+    reminders: list[dict[str, Any]] | None = None
+    comment_count: int | None = Field(default=None, alias="commentCount")
 
     model_config = {"populate_by_name": True, "extra": "allow"}
 
@@ -64,7 +77,7 @@ class Task(BaseModel):
 
     def to_output(self) -> dict[str, Any]:
         """Serialize for CLI output."""
-        return {
+        result = {
             "id": self.id,
             "title": self.title,
             "status": self.status_label,
@@ -79,4 +92,19 @@ class Task(BaseModel):
             "columnId": self.column_id,
             "pinnedTime": self.pinned_time,
             "items": self.items,
+            "kind": self.kind or "",
+            "assignee": self.assignee,
+            "desc": self.desc or "",
+            "isFloating": self.is_floating,
+            "timeZone": self.time_zone or "",
+            "progress": self.progress,
+            "sortOrder": self.sort_order,
+            "repeatFrom": self.repeat_from or "",
+            "repeatFlag": self.repeat_flag or "",
+            "exDate": self.ex_date or [],
+            "repeatFirstDate": self.repeat_first_date or "",
+            "commentCount": self.comment_count,
+            "reminders": self.reminders or [],
         }
+        # Strip None values for clean output
+        return {k: v for k, v in result.items() if v is not None}

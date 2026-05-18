@@ -28,6 +28,12 @@ _FETCH_ALL_LIMIT = 10_000
 
 def _format_task(task: dict[str, Any]) -> dict[str, Any]:
     """Normalize task dict for output."""
+    # Delegate to Pydantic model when available for consistency
+    from ticktick_cli.models.task import Task
+    try:
+        return Task(**task).to_output()
+    except Exception:
+        pass
     return {
         "id": task.get("id", ""),
         "title": task.get("title", ""),
@@ -42,8 +48,42 @@ def _format_task(task: dict[str, Any]) -> dict[str, Any]:
         "parentId": task.get("parentId"),
         "columnId": task.get("columnId"),
         "pinnedTime": task.get("pinnedTime"),
-        "items": task.get("items", []),  # subtask checklist items
+        "items": task.get("items", []),
+        "kind": task.get("kind", ""),
+        "assignee": task.get("assignee"),
+        "desc": task.get("desc", ""),
+        "isFloating": task.get("isFloating"),
+        "timeZone": task.get("timeZone", ""),
+        "progress": task.get("progress"),
+        "sortOrder": task.get("sortOrder"),
+        "repeatFrom": task.get("repeatFrom", ""),
+        "repeatFlag": task.get("repeatFlag", ""),
+        "exDate": task.get("exDate", []),
+        "repeatFirstDate": task.get("repeatFirstDate", ""),
+        "commentCount": task.get("commentCount"),
+        "reminders": task.get("reminders", []),
     }
+
+
+V2_ONLY_FIELDS = frozenset({
+    "assignee", "kind", "desc", "isFloating", "timeZone",
+    "progress", "sortOrder", "repeatFrom", "exDate",
+    "repeatFirstDate", "reminders",
+})
+
+
+def _require_v2_for_fields(ctx: click.Context, client: Any, **fields: Any) -> None:
+    """Check if any V2-only fields are used without V2 auth."""
+    if client.has_v2:
+        return
+    used_v2 = [k for k, v in fields.items() if v and k in V2_ONLY_FIELDS]
+    if used_v2:
+        output_error(
+            f"Fields require V2 authentication: {', '.join(sorted(used_v2))}. "
+            f"Run: ticktick auth login-v2 --username <email>",
+            ctx,
+        )
+        raise SystemExit(1) from None
 
 
 def _request_page_limit(ctx: click.Context, limit: int) -> int:
@@ -75,7 +115,18 @@ def task_group() -> None:
 @click.option("--tag", "-t", multiple=True, help="Tags (repeatable)")
 @click.option("--all-day", is_flag=True, help="Mark as all-day task")
 @click.option("--repeat", default=None, help="Recurrence RRULE (e.g., RRULE:FREQ=DAILY)")
-@click.option("--reminder", multiple=True, help="Reminder triggers")
+@click.option("--reminder", multiple=True, help="Reminder triggers (e.g., TRIGGER:-PT30M)")
+@click.option("--assignee", type=int, default=None, help="Assignee user ID (V2 only, shared project required)")
+@click.option("--kind", type=click.Choice(["TEXT", "CHECKLIST"]), default=None, help="Task type (V2 only)")
+@click.option("--desc", default=None, help="Description (for CHECKLIST tasks, V2 only)")
+@click.option("--floating", is_flag=True, default=None, help="Floating task — no fixed date (V2 only)")
+@click.option("--tz", "time_zone", default=None, help="IANA timezone (e.g., America/Los_Angeles, V2 only)")
+@click.option("--progress", type=int, default=None, help="Progress 0-100 (V2 only)")
+@click.option("--sort-order", type=int, default=None, help="Manual sort position (V2 only)")
+@click.option("--repeat-from", type=click.Choice(["0", "1", "2"]), default=None, help="Repeat origin: 0=due, 1=completion, 2=both (V2 only)")
+@click.option("--ex-date", multiple=True, default=None, help="Excluded dates for recurring tasks, YYYY-MM-DD (repeatable, V2 only)")
+@click.option("--repeat-first", default=None, help="First occurrence date YYYY-MM-DD for recurring task (V2 only)")
+@click.option("--column", default=None, help="Kanban column ID (V2 only)")
 @click.option("--if-not-exists", "if_not_exists", is_flag=True, help="Skip creation if a task with the same title exists in the project")
 @click.pass_context
 def task_add(
@@ -90,6 +141,17 @@ def task_add(
     all_day: bool,
     repeat: str | None,
     reminder: tuple[str, ...],
+    assignee: int | None,
+    kind: str | None,
+    desc: str | None,
+    floating: bool | None,
+    time_zone: str | None,
+    progress: int | None,
+    sort_order: int | None,
+    repeat_from: str | None,
+    ex_date: tuple[str, ...] | None,
+    repeat_first: str | None,
+    column: str | None,
     if_not_exists: bool,
 ) -> None:
     """Create a new task."""
@@ -110,13 +172,53 @@ def task_add(
     if repeat:
         task_data["repeatFlag"] = repeat
     if reminder:
-        task_data["reminders"] = list(reminder)
+        # Wrap raw strings into proper reminder objects for V2 API
+        from ticktick_cli.api.v2 import _generate_object_id
+        task_data["reminders"] = [
+            {"id": _generate_object_id(), "trigger": r} for r in reminder
+        ]
+    if assignee is not None:
+        task_data["assignee"] = assignee
+    if kind:
+        task_data["kind"] = kind
+    if desc:
+        task_data["desc"] = desc
+    if floating is not None:
+        task_data["isFloating"] = floating
+    if time_zone:
+        task_data["timeZone"] = time_zone
+    if progress is not None:
+        task_data["progress"] = progress
+    if sort_order is not None:
+        task_data["sortOrder"] = sort_order
+    if repeat_from:
+        task_data["repeatFrom"] = repeat_from
+    if ex_date:
+        task_data["exDate"] = list(ex_date)
+    if repeat_first:
+        task_data["repeatFirstDate"] = repeat_first
+    if column:
+        task_data["columnId"] = column
 
     if is_dry_run(ctx):
         output_dry_run("task.add", task_data, ctx)
         return
 
     client = get_client(ctx.obj.get("profile", "default"))
+
+    _require_v2_for_fields(
+        ctx, client,
+        assignee=task_data.get("assignee"),
+        kind=task_data.get("kind"),
+        desc=task_data.get("desc"),
+        isFloating=task_data.get("isFloating"),
+        timeZone=task_data.get("timeZone"),
+        progress=task_data.get("progress"),
+        sortOrder=task_data.get("sortOrder"),
+        repeatFrom=task_data.get("repeatFrom"),
+        exDate=task_data.get("exDate"),
+        repeatFirstDate=task_data.get("repeatFirstDate"),
+    )
 
     if if_not_exists:
         try:
@@ -247,34 +349,112 @@ def task_show(ctx: click.Context, task_id: str) -> None:
 @click.option("--tag", "-t", multiple=True)
 @click.option("--repeat", default=None)
 @click.option("--column", default=None, help="Kanban column ID")
+@click.option("--all-day", is_flag=True, default=None, help="Mark as all-day task")
+@click.option("--reminder", "reminders_opt", multiple=True, help="Reminder triggers (e.g., TRIGGER:-PT30M). Replaces existing reminders.")
+@click.option("--assignee", type=int, default=None, help="Assignee user ID (V2 only)")
+@click.option("--kind", type=click.Choice(["TEXT", "CHECKLIST"]), default=None, help="Task type (V2 only)")
+@click.option("--desc", default=None, help="Description (V2 only)")
+@click.option("--floating", "floating_opt", is_flag=True, default=None, help="Floating task (V2 only)")
+@click.option("--tz", "time_zone_opt", default=None, help="IANA timezone (V2 only)")
+@click.option("--progress", type=int, default=None, help="Progress 0-100 (V2 only)")
+@click.option("--sort-order", type=int, default=None, help="Manual sort position (V2 only)")
+@click.option("--repeat-from", type=click.Choice(["0", "1", "2"]), default=None, help="Repeat origin (V2 only)")
+@click.option("--ex-date", "ex_date_opt", multiple=True, default=None, help="Excluded dates YYYY-MM-DD (repeatable, V2 only)")
+@click.option("--repeat-first", default=None, help="First occurrence date YYYY-MM-DD (V2 only)")
 @click.pass_context
-def task_edit(ctx: click.Context, task_id: str, **kwargs: Any) -> None:
+def task_edit(
+    ctx: click.Context,
+    task_id: str,
+    title: str | None = None,
+    content: str | None = None,
+    priority: str | None = None,
+    due: str | None = None,
+    start: str | None = None,
+    project: str | None = None,
+    tag: tuple[str, ...] | None = None,
+    repeat: str | None = None,
+    column: str | None = None,
+    all_day: bool | None = None,
+    reminders_opt: tuple[str, ...] | None = None,
+    assignee: int | None = None,
+    kind: str | None = None,
+    desc: str | None = None,
+    floating_opt: bool | None = None,
+    time_zone_opt: str | None = None,
+    progress: int | None = None,
+    sort_order: int | None = None,
+    repeat_from: str | None = None,
+    ex_date_opt: tuple[str, ...] | None = None,
+    repeat_first: str | None = None,
+) -> None:
     """Edit a task's properties."""
     update: dict[str, Any] = {"id": task_id}
-    if kwargs.get("title"):
-        update["title"] = kwargs["title"]
-    if kwargs.get("content"):
-        update["content"] = kwargs["content"]
-    if kwargs.get("priority"):
-        update["priority"] = PRIORITY_MAP[kwargs["priority"]]
-    if kwargs.get("due"):
-        update["dueDate"] = parse_date(kwargs["due"])
-    if kwargs.get("start"):
-        update["startDate"] = parse_date(kwargs["start"])
-    if kwargs.get("tag"):
-        update["tags"] = list(kwargs["tag"])
-    if kwargs.get("repeat"):
-        update["repeatFlag"] = kwargs["repeat"]
-    if kwargs.get("column"):
-        update["columnId"] = kwargs["column"]
+    if title:
+        update["title"] = title
+    if content:
+        update["content"] = content
+    if priority:
+        update["priority"] = PRIORITY_MAP[priority]
+    if due:
+        update["dueDate"] = parse_date(due)
+    if start:
+        update["startDate"] = parse_date(start)
+    if tag:
+        update["tags"] = list(tag)
+    if repeat:
+        update["repeatFlag"] = repeat
+    if column:
+        update["columnId"] = column
+    if all_day is not None:
+        update["isAllDay"] = all_day
+    if reminders_opt:
+        from ticktick_cli.api.v2 import _generate_object_id
+        update["reminders"] = [
+            {"id": _generate_object_id(), "trigger": r} for r in reminders_opt
+        ]
+    if assignee is not None:
+        update["assignee"] = assignee
+    if kind:
+        update["kind"] = kind
+    if desc:
+        update["desc"] = desc
+    if floating_opt is not None:
+        update["isFloating"] = floating_opt
+    if time_zone_opt:
+        update["timeZone"] = time_zone_opt
+    if progress is not None:
+        update["progress"] = progress
+    if sort_order is not None:
+        update["sortOrder"] = sort_order
+    if repeat_from:
+        update["repeatFrom"] = repeat_from
+    if ex_date_opt:
+        update["exDate"] = list(ex_date_opt)
+    if repeat_first:
+        update["repeatFirstDate"] = repeat_first
 
     if is_dry_run(ctx):
         output_dry_run("task.edit", update, ctx)
         return
 
     client = get_client(ctx.obj.get("profile", "default"))
-    if kwargs.get("project"):
-        update["projectId"] = _resolve_project_id(client, kwargs["project"])
+
+    _require_v2_for_fields(
+        ctx, client,
+        assignee=update.get("assignee"),
+        kind=update.get("kind"),
+        desc=update.get("desc"),
+        isFloating=update.get("isFloating"),
+        timeZone=update.get("timeZone"),
+        progress=update.get("progress"),
+        sortOrder=update.get("sortOrder"),
+        repeatFrom=update.get("repeatFrom"),
+        exDate=update.get("exDate"),
+        repeatFirstDate=update.get("repeatFirstDate"),
+    )
+
+    if project:
+        update["projectId"] = _resolve_project_id(client, project)
     try:
         if client.has_v2:
             # Need projectId for V2 update
@@ -389,9 +569,21 @@ def task_move(ctx: click.Context, task_id: str, project: str) -> None:
 @task_group.command("search")
 @click.argument("query")
 @click.option("--limit", "-n", type=int, default=20)
+@click.option("--project", "-p", default=None, help="Filter by project name or ID")
+@click.option("--tag", "-t", multiple=True, help="Filter by tag")
+@click.option("--status", type=click.Choice(["active", "completed", "abandoned", "all"]), default="all", help="Filter by status")
+@click.option("--priority", type=click.Choice(["none", "low", "medium", "high"]), default=None, help="Filter by priority")
 @click.pass_context
-def task_search(ctx: click.Context, query: str, limit: int) -> None:
-    """Search tasks by text (searches title and content)."""
+def task_search(
+    ctx: click.Context,
+    query: str,
+    limit: int,
+    project: str | None,
+    tag: tuple[str, ...],
+    status: str,
+    priority: str | None,
+) -> None:
+    """Search tasks by text with optional filters."""
     client = get_client(ctx.obj.get("profile", "default"))
     try:
         tasks = client.get_all_tasks()
@@ -401,6 +593,22 @@ def task_search(ctx: click.Context, query: str, limit: int) -> None:
             for t in tasks
             if q in t.get("title", "").lower() or q in t.get("content", "").lower()
         ]
+        # Apply additional filters
+        if project:
+            pid = _resolve_project_id(client, project)
+            matches = [t for t in matches if t.get("projectId") == pid]
+        if status == "active":
+            matches = [t for t in matches if t.get("status", 0) == 0]
+        elif status == "completed":
+            matches = [t for t in matches if t.get("status", 0) >= 2]
+        elif status == "abandoned":
+            matches = [t for t in matches if t.get("status", 0) == -1]
+        if priority:
+            p_val = PRIORITY_MAP[priority]
+            matches = [t for t in matches if t.get("priority", 0) == p_val]
+        if tag:
+            tag_set = set(tag)
+            matches = [t for t in matches if tag_set.intersection(set(t.get("tags", [])))]
         formatted = [_format_task(t) for t in matches]
         output_list(
             formatted,
@@ -600,6 +808,29 @@ def comment_delete(ctx: click.Context, task_id: str, comment_id: str, project_id
             project_id = task.get("projectId", "")
         client.v2.delete_task_comment(project_id, task_id, comment_id)
         output_message("Comment deleted.", ctx)
+    except Exception as e:
+        output_error(str(e), ctx)
+        raise SystemExit(1) from None
+
+
+@comment_group.command("edit")
+@click.argument("task_id")
+@click.argument("comment_id")
+@click.argument("text")
+@click.option("--project", "project_id", default=None, help="Project ID (auto-detected if omitted)")
+@click.pass_context
+def comment_edit(ctx: click.Context, task_id: str, comment_id: str, text: str, project_id: str | None) -> None:
+    """Edit a comment's text."""
+    if is_dry_run(ctx):
+        output_dry_run("task.comment.edit", {"comment_id": comment_id, "text": text}, ctx)
+        return
+    client = get_client(ctx.obj.get("profile", "default"))
+    try:
+        if not project_id:
+            task = client.v2.get_task(task_id)
+            project_id = task.get("projectId", "")
+        client.v2.edit_task_comment(project_id, task_id, comment_id, text)
+        output_message("Comment updated.", ctx)
     except Exception as e:
         output_error(str(e), ctx)
         raise SystemExit(1) from None
